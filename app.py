@@ -1,6 +1,8 @@
 import os
 from flask import Flask
-import requests BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN ")
+import requests
+
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 app = Flask(__name__)
