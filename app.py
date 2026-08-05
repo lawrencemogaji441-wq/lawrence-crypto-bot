@@ -1,78 +1,54 @@
 import os, requests
 from flask import Flask
-from datetime import datetime
+from datetime import datetime, timedelta
+import pytz
 
 app = Flask(__name__)
 
-def send(text):
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat = os.environ.get("TELEGRAM_CHAT_ID")
+def send(t):
     try:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        requests.get(url, params={"chat_id": chat, "text": text}, timeout=10)
-    except:
-        pass
+        token=os.environ.get("TELEGRAM_BOT_TOKEN"); chat=os.environ.get("TELEGRAM_CHAT_ID")
+        requests.get(f"https://api.telegram.org/bot{token}/sendMessage", params={"chat_id":chat,"text":t}, timeout=10)
+    except: pass
 
 @app.route("/")
-def home():
-    return "Lawrence Bot LIVE - BUY & SELL!"
+def home(): return "Lawrence BOT Lagos Time FIXED!"
 
 @app.route("/price")
 def price():
-    # Get real prices
     try:
-        r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", timeout=10).json()
-        eth = float(r['ethereum']['usd'])
-        # Fake XAU from ETH for now, will add real gold API
-        xau = 2650 + (eth % 10)
-    except:
-        eth = 3800.0
-        xau = 2655.0
-
-    # Simple MA logic for BOTH directions
-    now = datetime.now()
-    entry_time = now.strftime("%-I:%M %p")
+        r=requests.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",timeout=10).json()
+        eth=float(r['ethereum']['usd'])
+    except: eth=3800.0
     
-    # Decide BUY or SELL - this will alternate!
-    if int(now.minute) % 2 == 0:
-        direction = "BUY 🟢"
-        action = "LONG"
+    # Use LAGOS TIME!
+    lagos = pytz.timezone('Africa/Lagos')
+    now = datetime.now(lagos)
+    
+    if (now.hour + now.minute) % 2 == 0:
+        direction="BUY 🟢"; action="LONG"; tp=eth*1.02; sl=eth*0.99
     else:
-        direction = "SELL 🔴"
-        action = "SHORT"
+        direction="SELL 🔴"; action="SHORT"; tp=eth*0.98; sl=eth*1.01
 
-    # For ETH Futures
-    msg1 = f"""📡 Lawrence Signal
-🎯 Accuracy: 80%
+    t1 = now.strftime("%I:%M %p")
+    t2 = (now + timedelta(minutes=1)).strftime("%I:%M %p")
+    t3 = (now + timedelta(minutes=2)).strftime("%I:%M %p")
+
+    msg=f"""📡 Lawrence Signal - {action}
+⏰ Lagos Time: {t1}
 Trade: ETH/USD
-Entry: {entry_time}
 Direction: {direction}
 Price: ${eth:.2f}
-TP: ${eth*1.015:.2f} | SL: ${eth*0.992:.2f}
-5x Isolated"""
+TP: ${tp:.2f} | SL: ${sl:.2f}
+5x Isolated
 
-    # For XAU binary like screenshot
-    m1 = now.strftime("%-I:%M")
-    m2 = (now.minute + 1) % 60
-    m3 = (now.minute + 2) % 60
-    
-    msg2 = f"""📡 10x Signal
-🎯 Accuracy Level: 80%
-Trade: XAU/USD 🇺🇸 (OTC)
-Expiry: 30s
-Entry: {entry_time}
+📡 XAU/USD (OTC)
+Expiry: 5m
+Entry: {t1}
 Direction: {direction}
+Martingale: {t1}, {t2}, {t3}"""
 
-↩️ Martingale Levels:
-• Level 1 → {m1} PM
-• Level 2 → {m2} PM
-• Level 3 → {m3} PM
+    send(msg)
+    return msg.replace("\n","<br>")
 
-⏳ Preparing... - 1:00"""
-
-    full = msg1 + "\n\n" + msg2
-    send(full)
-    return full.replace("\n", "<br>")
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+if __name__=="__main__": app.run(host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
