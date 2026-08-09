@@ -1,109 +1,97 @@
-from flask import Flask
-import requests
-import os
-import threading
-import time
-from datetime import datetime, timedelta
-import yfinance as yf
+    from flask import Flask
+import threading, time, datetime, pytz, requests, yfinance as yf
 import pandas as pd
-import pytz
 
-app = Flask(__name__)
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# ==== PUT YOURS HERE ====
+BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+CHAT_ID = "PUT_YOUR_CHAT_ID_HERE"
 
 PAIRS = {
     "EUR/USD": "EURUSD=X",
     "GBP/USD": "GBPUSD=X",
     "USD/JPY": "USDJPY=X"
 }
-EXPIRY = 5
-LAGOS_TZ = pytz.timezone("Africa/Lagos")
-last_signal = {}
 
-def send_telegram(message):
+TIMEZONE = pytz.timezone('Africa/Lagos')
+START_HOUR = 9
+END_HOUR = 16
+COOLDOWN_MIN = 10
+
+app = Flask(__name__)
+last_scan = "Never"
+total_scans = 0
+signals_sent = 0
+last_signal_time = {}
+start_time = datetime.datetime.now(TIMEZONE)
+
+def send_telegram(text):
+    global signals_sent
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}, timeout=10)
+        requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=10)
+        signals_sent += 1
     except Exception as e:
-        print(f"TG Error: {e}")
+        print("Telegram error:", e)
 
-def calc_rsi(prices, period=14):
-    delta = prices.diff()
-    gain = delta.where(delta > 0, 0).rolling(window=period).mean()
-    loss = -delta.where(delta < 0, 0).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def get_signal(symbol_yf, pair_name):
+def get_signal(pair_name, yf_symbol):
     try:
-        df = yf.download(symbol_yf, period="5d", interval="5m", progress=False, auto_adjust=True)
-        if len(df) < 250:
+        df = yf.download(yf_symbol, period="2d", interval="5m", progress=False)
+        if len(df) < 50:
             return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
         df['EMA50'] = df['Close'].ewm(span=50).mean()
         df['EMA200'] = df['Close'].ewm(span=200).mean()
-        df['RSI'] = calc_rsi(df['Close'])
+        df['RSI'] = 100 - (100 / (1 + df['Close'].diff().where(lambda x: x>0,0).rolling(14).mean() / -df['Close'].diff().where(lambda x: x<0,0).rolling(14).mean()))
         df['SMA20'] = df['Close'].rolling(20).mean()
-        df['STD20'] = df['Close'].rolling(20).std()
-        df['Upper'] = df['SMA20'] + (df['STD20'] * 2)
-        df['Lower'] = df['SMA20'] - (df['STD20'] * 2)
+        df['STD'] = df['Close'].rolling(20).std()
+        df['Upper'] = df['SMA20'] + 2*df['STD']
+        df['Lower'] = df['SMA20'] - 2*df['STD']
         last = df.iloc[-1]
         prev = df.iloc[-2]
         uptrend = last['EMA50'] > last['EMA200']
-        downtrend = last['EMA50'] < last['EMA200']
-        bullish = last['Close'] > last['Open']
-        bearish = last['Close'] < last['Open']
-        if uptrend and 35 < last['RSI'] < 55 and prev['RSI'] < last['RSI'] and bullish:
-            return ("CALL", last)
-        if downtrend and 45 < last['RSI'] < 65 and prev['RSI'] > last['RSI'] and bearish:
-            return ("PUT", last)
+        if uptrend and prev['RSI'] < 30 and last['RSI'] > 30 and last['Close'] < last['Lower']*1.001:
+            return "CALL"
+        if not uptrend and prev['RSI'] > 70 and last['RSI'] < 70 and last['Close'] > last['Upper']*0.999:
+            return "PUT"
         return None
-    except Exception as e:
-        print(f"Error {pair_name}: {e}")
+    except:
         return None
 
-def is_best_time():
-    now = datetime.now(LAGOS_TZ)
-    if now.weekday() >= 5:
-        return False
-    return 9 <= now.hour <= 16
-
-def bot_loop():
-    print("Lawrence Sniper FINAL BEST - Running 24/7...")
+def sniper_loop():
+    global last_scan, total_scans
     send_telegram("✅ Lawrence Sniper FINAL Started\nPairs: EUR/USD, GBP/USD, USD/JPY\nChart: 5m | Expiry: 5m\nTime: 09:00-16:00 WAT\nMode: A+ setups only")
     while True:
         try:
-            if not is_best_time():
-                time.sleep(300)
-                continue
-            now = datetime.now(LAGOS_TZ)
-            for pair_name, yf_sym in PAIRS.items():
-                result = get_signal(yf_sym, pair_name)
-                if result:
-                    direction, candle = result
-                    last = last_signal.get(pair_name, 0)
-                    if time.time() - last > 900:
-                        price = round(float(candle['Close']), 5)
-                        rsi = round(float(candle['RSI']), 1)
-                        emoji = "🟢" if direction == "CALL" else "🔴"
-                        next_entry = now + timedelta(minutes=5 - now.minute % 5)
-                        next_entry = next_entry.replace(second=0, microsecond=0)
-                        msg = f"📡 *Lawrence Signal - {direction}* {emoji}\n⏰ Lagos: {now.strftime('%I:%M %p')} WAT\nPair: {pair_name}\nDirection: {direction} {emoji}\nPrice: {price} | RSI: {rsi}\nExpiry: {EXPIRY} Minutes - Pocket Option\nEnter At: {next_entry.strftime('%H:%M:00')} WAT\n"
+            now = datetime.datetime.now(TIMEZONE)
+            last_scan = now.strftime("%I:%M:%S %p WAT")
+            total_scans += 1
+            if now.weekday() < 5 and START_HOUR <= now.hour < END_HOUR:
+                for pair_name, yf_symbol in PAIRS.items():
+                    if pair_name in last_signal_time:
+                        if (now - last_signal_time[pair_name]).seconds < COOLDOWN_MIN*60:
+                            continue
+                    signal = get_signal(pair_name, yf_symbol)
+                    if signal:
+                        t1 = now.strftime("%I:%M %p")
+                        t2 = (now + datetime.timedelta(minutes=1)).strftime("%I:%M %p")
+                        t3 = (now + datetime.timedelta(minutes=2)).strftime("%I:%M %p")
+                        emoji = "🟢" if signal=="CALL" else "🔴"
+                        msg = f"🔥 Lawrence Sniper FINAL\nPair: {pair_name}\nAction: {signal} {emoji}\nLagos: {t1} WAT\nEnter At: {t1}, {t2}, {t3}\nExpiry: 5m | Chart: 5m\nReason: A+ Setup"
                         send_telegram(msg)
-                        last_signal[pair_name] = time.time()
+                        last_signal_time[pair_name] = now
             time.sleep(60)
-        except Exception as e:
-            print(f"Loop error: {e}")
+        except:
             time.sleep(60)
-
-threading.Thread(target=bot_loop, daemon=True).start()
 
 @app.route('/')
 def home():
-    return "Lawrence Sniper Bot - BEST VERSION Running - EUR/USD, GBP/USD, USD/JPY"
+    uptime = datetime.datetime.now(TIMEZONE) - start_time
+    return f"<h2>● BOT IS LIVE - FINAL</h2><p>Last Scan: {last_scan}</p><p>Uptime: {str(uptime).split('.')[0]}</p><p>Scans: {total_scans} | Signals: {signals_sent}</p><p>Pairs: EUR/USD, GBP/USD, USD/JPY | 5m | 09:00-16:00 | A+ only</p><meta http-equiv='refresh' content='10'>"
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-      
+@app.route('/health')
+def health():
+    return "OK", 200
+
+threading.Thread(target=sniper_loop, daemon=True).start()
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
