@@ -1,9 +1,10 @@
     from flask import Flask
 import threading, time, datetime, pytz, requests, yfinance as yf
 import pandas as pd
+import os
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
-BOT_TOKEN = "8866152379:AAEyLjhBDHtLR6a5OyLZ4ZSz7kOA5dnPCdY"
-CHAT_ID = "8262047333"
 
 PAIRS = {"EUR/USD": "EURUSD=X","GBP/USD": "GBPUSD=X","USD/JPY": "USDJPY=X"}
 TIMEZONE = pytz.timezone('Africa/Lagos')
