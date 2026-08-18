@@ -1,6 +1,7 @@
 Flask
 requests
-yfinance
 pandas
 pytz
 gunicorn
+pybit
+ta
