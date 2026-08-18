@@ -196,6 +196,10 @@ def bot_loop():
                 time.sleep(10)
         time.sleep(30)
 
+@app.route('/health')
+def health():
+    return 'OK - Lawrence v8 LIVE', 200
+
 @app.route('/')
 def home():
     winrate = round((stats["wins"] / stats["total_signals"] * 100), 1) if stats["total_signals"]>0 else 0
