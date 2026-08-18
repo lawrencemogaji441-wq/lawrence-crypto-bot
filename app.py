@@ -1,163 +1,129 @@
 
             
             
-import os, time, threading, requests, json
-from datetime import datetime, timezone, timedelta
-from flask import Flask, render_template_string
-import yfinance as yf
-import pandas as pd
+                                    
+# Lawrence v8 SNIPER 70% - Bybit LIVE FULL AUTO - FINAL
+# FULL AUTO TRADING - REAL MONEY
+import os, time, requests, pandas as pd, ta, pytz
+from datetime import datetime
+from pybit.unified_trading import HTTP
 
-BOT_TOKEN=os.getenv("BOT_TOKEN")
-CHAT_ID=os.getenv("CHAT_ID")
-PAIRS=["EUR/USD (OTC)","GBP/USD (OTC)","EUR/GBP (OTC)","USD/JPY (OTC)"]
-YF_MAP={"EUR/USD (OTC)":"EURUSD=X","GBP/USD (OTC)":"GBPUSD=X","EUR/GBP (OTC)":"EURGBP=X","USD/JPY (OTC)":"JPY=X"}
-WAT=timezone(timedelta(hours=1))
-STATS_FILE="stats.json"
+# === LIVE CONFIG ===
+BYBIT_API_KEY = "PUT_YOUR_LIVE_KEY_HERE"
+BYBIT_API_SECRET = "PUT_YOUR_LIVE_SECRET_HERE"
+TELEGRAM_BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+TELEGRAM_CHAT_ID = "PUT_YOUR_CHAT_ID_HERE"
 
-app=Flask(__name__)
-last_scan="Never"; scans_count=0; signals_count=0; last_signals={}; wins=0; losses=0; draws=0; blocked_night=0
+SYMBOLS = ["BTCUSDT", "ETHUSDT"] # START WITH 1 OR 2 ONLY
+CATEGORY = "linear"
+QTY_USDT = 10  # Trade with $10 per signal, not qty coin - safer
+LEVERAGE = "10"
+STOP_LOSS_PCT = 1.5  # 1.5% SL
+TAKE_PROFIT_PCT = 3.0 # 3% TP = 1:2 RR
 
-def load_stats():
-    global wins,losses,draws,signals_count,scans_count
+WAT = pytz.timezone("Africa/Lagos")
+bybit = HTTP(testnet=False, api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET)
+
+def send_tg(msg):
     try:
-        if os.path.exists(STATS_FILE):
-            d=json.load(f) if (f:=open(STATS_FILE)) else {}
-            return
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
     except: pass
-    # Force fresh for v8 70%
-    wins=0; losses=0; draws=0; signals_count=0; scans_count=0
-    save_stats()
+    print(msg)
 
-def save_stats():
+def get_candles(symbol, interval, limit=100):
+    resp = bybit.get_kline(category=CATEGORY, symbol=symbol, interval=str(interval), limit=limit)
+    df = pd.DataFrame(resp['result']['list'], columns=["startTime","open","high","low","close","volume","turnover"])
+    df = df.iloc[::-1]
+    df["close"] = df["close"].astype(float)
+    df["high"] = df["high"].astype(float)
+    df["low"] = df["low"].astype(float)
+    return df
+
+def calc_qty(symbol, price):
+    # Convert $10 to coin qty
     try:
-        with open(STATS_FILE,'w') as f:
-            json.dump({'wins':wins,'losses':losses,'draws':draws,'signals_count':signals_count,'scans_count':scans_count,'blocked_night':blocked_night}, f)
-    except: pass
+        info = bybit.get_instruments_info(category=CATEGORY, symbol=symbol)
+        # simple: qty = USDT / price
+        qty = QTY_USDT / price
+        return str(round(qty, 3))
+    except:
+        return "0.01"
 
-load_stats()
-# Reset for v8 70% push
-wins=0; losses=0; draws=0; signals_count=0; scans_count=0; blocked_night=0
+def check_v8(df_1m, df_5m):
+    now = datetime.now(WAT)
+    if not (7 <= now.hour < 21):
+        return None, f"Outside 07-21 WAT {now.strftime('%H:%M')}"
 
-HTML="""<html><head><meta name="viewport" content="width=device-width"><style>
-body{font-family:Arial;background:#0a0e1a;color:white;text-align:center;padding:20px}
-.card{background:#1a2332;padding:20px;border-radius:15px;margin:10px auto;max-width:500px;border:2px solid #ffcc00}
-.live{color:#00ff88;font-weight:bold}</style></head><body>
-<h1>LAWRENCE v8 SNIPER 70%</h1>
-<div class="card"><div class="live">🎯 TARGET 70% WINRATE MODE</div>
-<p>Last: {{last_scan}}</p><p>Scans: {{scans}} | Signals: {{signals}} | Night Blocked: {{blocked}}</p>
-<p>✅ {{wins}} | ❌ {{losses}} | ➖ {{draws}}</p><p>WinRate: {{winrate}}% | Total: {{total}}</p>
-<p>Trading Hours: 07:00-21:00 WAT only</p></div></body></html>"""
+    c = df_1m["close"]
+    ema7, ema21, ema50 = ta.trend.ema_indicator(c,7).iloc[-1], ta.trend.ema_indicator(c,21).iloc[-1], ta.trend.ema_indicator(c,50).iloc[-1]
+    rsi = ta.momentum.rsi(c,14).iloc[-1]
+    
+    c5 = df_5m["close"]
+    ema7_5, ema21_5 = ta.trend.ema_indicator(c5,7).iloc[-1], ta.trend.ema_indicator(c5,21).iloc[-1]
+    
+    price = c.iloc[-1]
+    if df_1m.iloc[-1]["high"] == df_1m.iloc[-1]["low"]:
+        return None, "Volatility filter block"
 
-def send_telegram(msg):
-    try: requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",data={"chat_id":CHAT_ID,"text":msg},timeout=10)
-    except: pass
+    buy_cond = ema7 > ema21 > ema50 and price > ema7 and (ta.trend.ema_indicator(c,7).iloc[-2] > ta.trend.ema_indicator(c,21).iloc[-2]) and ema7_5 > ema21_5 and 52 <= rsi <= 68
+    sell_cond = ema7 < ema21 < ema50 and price < ema7 and (ta.trend.ema_indicator(c,7).iloc[-2] < ta.trend.ema_indicator(c,21).iloc[-2]) and ema7_5 < ema21_5 and 32 <= rsi <= 48
 
-def check_result_later(pair, entry_price, action, entry_time_str):
-    def job():
-        global wins,losses,draws
-        time.sleep(75)
-        try:
-            df=yf.download(YF_MAP[pair],period="1d",interval="1m",progress=False)
-            if df.empty: return
-            if isinstance(df.columns,pd.MultiIndex): df.columns=df.columns.get_level_values(0)
-            exit_price=float(df['Close'].iloc[-1])
-            if abs(exit_price-entry_price)<0.00005:
-                draws+=1; save_stats()
-                send_telegram(f"➖ DRAW\nPair: {pair}\nEntry: {entry_price:.5f} → {exit_price:.5f}\nRefund - Use Martingale L1")
-            elif (action in ["CALL","BUY"] and exit_price>entry_price) or (action in ["PUT","SELL"] and exit_price<entry_price):
-                wins+=1; save_stats()
-                send_telegram(f"✅ WIN!\nPair: {pair} {action}\n{entry_price:.5f} → {exit_price:.5f}\n+85%\n{entry_time_str}")
-            else:
-                losses+=1; save_stats()
-                send_telegram(f"❌ LOSS\nPair: {pair} {action}\n{entry_price:.5f} → {exit_price:.5f}\nGo to Martingale L1\n{entry_time_str}")
-            total=wins+losses+draws; rt=wins+losses; wr=round((wins/rt*100) if rt>0 else 0,1)
-            send_telegram(f"📊 STATS v8 SNIPER\n✅ {wins} | ❌ {losses} | ➖ {draws}\nWinRate: {wr}% | Total: {total}\n🎯 Target 70%")
+    if buy_cond:
+        return "Buy", f"BUY {price} EMA {ema7:.1f}>{ema21:.1f}>{ema50:.1f} RSI {rsi:.1f} 1m+5m OK"
+    if sell_cond:
+        return "Sell", f"SELL {price} EMA {ema7:.1f}<{ema21:.1f}<{ema50:.1f} RSI {rsi:.1f} 1m+5m OK"
+    return None, f"Wait EMA7 {ema7:.1f} EMA21 {ema21:.1f} RSI {rsi:.1f}"
+
+def place_auto_order(symbol, side, price):
+    try:
+        qty = calc_qty(symbol, price)
+        # Set leverage
+        try: bybit.set_leverage(category=CATEGORY, symbol=symbol, buyLeverage=LEVERAGE, sellLeverage=LEVERAGE)
         except: pass
-    threading.Thread(target=job,daemon=True).start()
-
-def get_signal_v8(pair):
-    try:
-        # Use 5m for trend + 1m for entry = higher quality
-        df1=yf.download(YF_MAP[pair],period="2d",interval="1m",progress=False)
-        df5=yf.download(YF_MAP[pair],period="5d",interval="5m",progress=False)
-        if df1.empty or df5.empty or len(df1)<50 or len(df5)<50: return None
-        if isinstance(df1.columns,pd.MultiIndex): df1.columns=df1.columns.get_level_values(0)
-        if isinstance(df5.columns,pd.MultiIndex): df5.columns=df5.columns.get_level_values(0)
         
-        c1=df1['Close']; c5=df5['Close']
-        # Indicators 1m
-        ema7=c1.ewm(span=7).mean(); ema21=c1.ewm(span=21).mean(); ema50=c1.ewm(span=50).mean()
-        delta=c1.diff(); gain=(delta.where(delta>0,0)).rolling(14).mean(); loss=(-delta.where(delta<0,0)).rolling(14).mean()
-        rsi=100-(100/(1+gain/loss))
-        # ATR for volatility filter - avoid dead market
-        tr=(df1['High']-df1['Low']).rolling(14).mean()
-        atr=float(tr.iloc[-1])
+        sl_price = price * (1 - STOP_LOSS_PCT/100) if side=="Buy" else price * (1 + STOP_LOSS_PCT/100)
+        tp_price = price * (1 + TAKE_PROFIT_PCT/100) if side=="Buy" else price * (1 - TAKE_PROFIT_PCT/100)
         
-        cp=float(c1.iloc[-1]); ce7=float(ema7.iloc[-1]); ce21=float(ema21.iloc[-1]); ce50=float(ema50.iloc[-1])
-        cr=float(rsi.iloc[-1]); pr=float(rsi.iloc[-2])
-        # 5m trend
-        e5_7=c5.ewm(span=7).mean().iloc[-1]; e5_21=c5.ewm(span=21).mean().iloc[-1]
-        
-        # Volatility filter - if ATR too small, market dead = skip (this caused your 15 losses at 10:50PM)
-        if atr < 0.00008 and "JPY" not in pair: return None
-        if atr < 0.008 and "JPY" in pair: return None
-        
-        # 70% LOGIC: need strong trend + RSI not overbought + 5m trend same direction
-        sig=None
-        # BUY: price above all EMAs, 7>21>50, RSI 50-68 rising, 5m also bullish
-        if cp>ce7 and ce7>ce21 and ce21>ce50 and 52<cr<68 and cr>pr and e5_7>e5_21:
-            # Additional: last candle bullish
-            if float(c1.iloc[-1]) > float(df1['Open'].iloc[-1]):
-                sig="BUY"
-        # SELL: opposite
-        elif cp<ce7 and ce7<ce21 and ce21<ce50 and 32<cr<48 and cr<pr and e5_7<e5_21:
-            if float(c1.iloc[-1]) < float(df1['Open'].iloc[-1]):
-                sig="SELL"
-        
-        if sig:
-            return {"pair":pair,"action":sig,"price":cp,"rsi":cr,"atr":atr}
-        return None
+        order = bybit.place_order(
+            category=CATEGORY,
+            symbol=symbol,
+            side=side,
+            orderType="Market",
+            qty=qty,
+            stopLoss=str(round(sl_price,2)),
+            takeProfit=str(round(tp_price,2)),
+            tpslMode="Full"
+        )
+        return True, order
     except Exception as e:
-        print(e)
-        return None
+        return False, str(e)
 
-def bot_loop():
-    global last_scan,scans_count,signals_count,blocked_night
-    send_telegram(f"🎯 Lawrence v8 SNIPER 70% Started!\n\nNew rules for 70%:\n• Only trades 07:00-21:00 WAT (blocks midnight losses)\n• Volatility filter (no more 1.35079→1.35079 draws)\n• 5min + 1min trend must agree\n• Price must be above/below EMA 7>21>50\n• RSI 52-68 BUY, 32-48 SELL\n\nThis blocks ~70% of bad signals that gave you 23% winrate.\nOld stats reset to 0 for clean 70% push!")
+def run():
+    send_tg("🚀 Lawrence v8 SNIPER Bybit LIVE AUTO Started!
+$10/order | Lev 10x | SL 1.5% TP 3% | 07-21 WAT | AUTO TRADING REAL MONEY")
     while True:
-        try:
-            now=datetime.now(WAT)
-            last_scan=now.strftime("%I:%M:%S %p WAT")
-            scans_count+=1
-            # BLOCK NIGHT TRADING - this is what killed your winrate from 66% to 23%
-            if now.hour <7 or now.hour >=21:
-                blocked_night+=1
-                if blocked_night%20==0:
-                    save_stats()
-                time.sleep(60)
-                continue
-            for p in PAIRS:
-                r=get_signal_v8(p)
-                if r:
-                    k=f"{r['pair']}_{r['action']}"
-                    if k in last_signals and (time.time()-last_signals[k])<600: continue # 10min cooldown for quality
-                    last_signals[k]=time.time(); signals_count+=1; save_stats()
-                    entry_time=(now+timedelta(minutes=1)).strftime("%I:%M %p")
-                    l1=(now+timedelta(minutes=2)).strftime("%I:%M %p")
-                    l2=(now+timedelta(minutes=3)).strftime("%I:%M %p")
-                    l3=(now+timedelta(minutes=4)).strftime("%I:%M %p")
-                    msg1=f"🎯 SNIPER 70% SIGNAL!\n\nTrade: {r['pair']}\n⏳ Timer: 1 min\n➡️ Entry: {entry_time}\n📈 Direction: {r['action']} {'🟩' if r['action']=='BUY' else '🟥'}\nRSI: {r['rsi']:.1f} | ATR: {r['atr']:.5f}\n\n🔄 Martingale:\nL1 → {l1} ($4)\nL2 → {l2} ($8)\nL3 → {l3} ($16)"
-                    send_telegram(msg1); time.sleep(1)
-                    send_telegram(f"{'BUY' if r['action']=='BUY' else 'SELL'} {r['pair']} NOW. {'📈📈📈' if r['action']=='BUY' else '📉📉📉'}")
-                    check_result_later(r['pair'],r['price'],r['action'],last_scan)
-                time.sleep(2)
-            time.sleep(60) # scan every 60s for quality, not 30s
-        except Exception as e: print(e); time.sleep(10)
+        for sym in SYMBOLS:
+            try:
+                df1 = get_candles(sym, 1)
+                df5 = get_candles(sym, 5)
+                sig, reason = check_v8(df1, df5)
+                print(f"{datetime.now(WAT).strftime('%H:%M:%S')} {sym} {reason}")
+                if sig:
+                    price = df1["close"].iloc[-1]
+                    send_tg(f"{'🟢' if sig=='Buy' else '🔴'} {sig} {sym} NOW @ {price}
+{reason}
+Placing LIVE order...")
+                    ok, res = place_auto_order(sym, sig, price)
+                    if ok:
+                        send_tg(f"✅ AUTO EXECUTED {sym} {sig} Qty ${QTY_USDT} SL {STOP_LOSS_PCT}% TP {TAKE_PROFIT_PCT}%")
+                    else:
+                        send_tg(f"❌ FAILED {sym}: {res}")
+                    time.sleep(300) # 5 min cooldown
+            except Exception as e:
+                print(f"Err {sym} {e}")
+        time.sleep(30)
 
-@app.route("/")
-def home():
-    total=wins+losses+draws; rt=wins+losses; wr=round((wins/rt*100) if rt>0 else 0,1)
-    return render_template_string(HTML,last_scan=last_scan,scans=scans_count,signals=signals_count,wins=wins,losses=losses,draws=draws,winrate=wr,total=total,blocked=blocked_night)
-
-threading.Thread(target=bot_loop,daemon=True).start()
-if __name__=="__main__": app.run(host="0.0.0.0",port=int(os.environ.get("PORT",10000)))
+if __name__ == "__main__":
+    run()
+            
