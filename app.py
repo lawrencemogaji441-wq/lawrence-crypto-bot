@@ -52,8 +52,7 @@ def calc_qty(price):
 
 def check_v10_balance(df1, df5):
     now = datetime.now(WAT)
-    if not (7 <= now.hour < 21):
-        return None, f"Sleep {now.strftime('%H:%M')} WAT"
+    # 24/7 mode - no sleep
     c,h,l,vol = df1["close"], df1["high"], df1["low"], df1["volume"]
     if len(c) < 100: return None, "Loading..."
     price = c.iloc[-1]
@@ -159,7 +158,7 @@ def place_order(sym, side, price):
         return False, str(e), 0
 
 def loop():
-    tg(f"🚀 *Lawrence v10 BALANCE S/R LIVE!*\n10 indicators: EMA+RSI+ADX+MACD+BB+Stoch+Vol+EMA200+5m+S/R\nNeed 8/10 confirmations\nS/R balance: trades only near Support (Buy) or Resistance (Sell)\n$10 protection 1 trade max")
+    tg(f"🚀 *Lawrence v10.1 BALANCE 24/7 LIVE!*\n10 indicators 24/7 | S/R Balance\nNeed 8/10 confirmations\nS/R balance: trades only near Support (Buy) or Resistance (Sell)\n$10 protection 1 trade max")
     while True:
         for sym in SYMBOLS:
             try:
@@ -214,5 +213,3 @@ def home():
 
 threading.Thread(target=loop, daemon=True).start()
 if __name__=="__main__": app.run(host='0.0.0.0', port=int(os.getenv("PORT",10000)))
-      
-                        
