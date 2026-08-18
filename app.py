@@ -76,9 +76,9 @@ th,td{padding:8px;text-align:left;border-bottom:1px solid #333;font-size:13px}
 </div>
 
 <div class="card">
-<h3>📊 Recent Trades</h3>
+<h3>📊 Recent Trades (with SL/TP)</h3>
 <table>
-<tr><th>Time</th><th>Pair</th><th>Side</th><th>Result</th></tr>
+<tr><th>Time</th><th>Pair</th><th>Side</th><th>SL / TP</th></tr>
 {% for t in trades %}
 <tr><td>{{t.time}}</td><td>{{t.pair}}</td><td>{{t.type}}</td><td class="{{t.cls}}">{{t.result}}</td></tr>
 {% else %}
@@ -91,7 +91,7 @@ th,td{padding:8px;text-align:left;border-bottom:1px solid #333;font-size:13px}
 </div>
 </div>
 
-<small style="display:block;text-align:center;margin-top:20px;color:#555">EMA7 Sniper • 07:00-21:00 WAT • SL 1.5% TP 3% • Lev 10x • Bybit Linear</small>
+<small style="display:block;text-align:center;margin-top:20px;color:#555">EMA7 Sniper • 07:00-21:00 WAT • 🛑 SL 1.5% | 🎯 TP 3.0% (1:2 RR) • Lev 10x • $10/order • Bybit Linear</small>
 </body>
 </html>
 """
@@ -108,7 +108,6 @@ def send_tg(msg):
 
 def get_candles(symbol, interval, limit=100):
     if not bybit:
-        # Signal only mode - use public API without auth
         public = HTTP(testnet=False)
         resp = public.get_kline(category=CATEGORY, symbol=symbol, interval=str(interval), limit=limit)
     else:
@@ -172,18 +171,20 @@ def bot_loop():
                 print(f"{datetime.now(WAT).strftime('%H:%M:%S')} {sym} {reason}")
                 if sig:
                     price = df1["close"].iloc[-1]
+                    sl = price * (1 - STOP_LOSS_PCT/100) if sig=="Buy" else price * (1 + STOP_LOSS_PCT/100)
+                    tp = price * (1 + TAKE_PROFIT_PCT/100) if sig=="Buy" else price * (1 - TAKE_PROFIT_PCT/100)
                     stats["total_signals"] += 1
-                    trade = {"time": datetime.now(WAT).strftime("%H:%M:%S"), "pair": sym, "type": sig, "result": "Signal", "cls": "yellow"}
+                    trade = {"time": datetime.now(WAT).strftime("%H:%M:%S"), "pair": sym, "type": sig, "result": f"SL {sl:.2f} | TP {tp:.2f}", "cls": "yellow"}
                     stats["trades"] = [trade] + stats["trades"][:9]
-                    send_tg(f"{'🟢' if sig=='Buy' else '🔴'} {sig} {sym} @ {price:.2f}\n{reason}\nPlacing order...")
+                    send_tg(f"{'🟢' if sig=='Buy' else '🔴'} {sig} {sym} @ {price:.2f}\n{reason}\n🎯 TP: {tp:.2f} (+{TAKE_PROFIT_PCT}%) | 🛑 SL: {sl:.2f} (-{STOP_LOSS_PCT}%)\nRisk:Reward 1:2 | Lev {LEVERAGE}x\nPlacing order...")
                     ok, res = place_auto_order(sym, sig, price)
                     if ok:
                         stats["wins"] += 1
-                        trade["result"] = "EXECUTED ✅"
+                        trade["result"] = f"EXECUTED ✅ SL {sl:.2f} TP {tp:.2f}"
                         trade["cls"] = "green"
                     else:
                         if "Signal Only" in res:
-                            trade["result"] = "SIGNAL ONLY (No API)"
+                            trade["result"] = f"SIGNAL ONLY - SL {sl:.2f} TP {tp:.2f}"
                         else:
                             stats["losses"] += 1
                             trade["result"] = f"FAILED ❌ {res[:50]}"
