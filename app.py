@@ -18,7 +18,7 @@ WAT = pytz.timezone("Africa/Lagos")
 
 bybit = HTTP(testnet=False, api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET) if BYBIT_API_KEY else None
 app = Flask(__name__)
-stats = {"started": datetime.now(WAT).strftime("%Y-%m-%d %H:%M:%S"), "signals":0,"wins":0,"losses":0,"pnl":0.0,"last":"Starting v10.1 24/7...","trades":[],"active":[]}
+stats = {"started": datetime.now(WAT).strftime("%Y-%m-%d %H:%M:%S"), "signals":0,"wins":0,"losses":0,"pnl":0.0,"last":"Starting v10.2 24/7...","trades":[],"active":[]}
 
 def tg(msg):
     try:
@@ -117,7 +117,7 @@ def place_order(sym, side, price):
     return sl, tp
 
 def loop():
-    tg("🚀 *Lawrence v10.1 BALANCE 24/7 LIVE!*\n10 indicators 8/10 needed\nS/R Balance: near SUP=Buy near RES=Sell\n24/7 NO SLEEP + $10 protection 1 trade max\nDashboard: https://lawrence-crypto-bot.onrender.com")
+    tg("🚀 *Lawrence v10.2 BALANCE 24/7 LIVE!*\n10 indicators 8/10 needed\nS/R Balance: near SUP=Buy near RES=Sell\n24/7 NO SLEEP + $10 protection 1 trade max\nDashboard: https://lawrence-crypto-bot.onrender.com")
     while True:
         for sym in SYMBOLS:
             try:
@@ -148,6 +148,10 @@ def loop():
                 print(f"Err {sym}: {e}"); time.sleep(10)
         time.sleep(25)
 
+@app.route('/health')
+def health():
+    return 'OK', 200
+
 @app.route('/')
 def home():
     trades_html="".join([f"<tr><td>{t['time']}</td><td>{t['pair']}</td><td>{t['side']}</td><td>{t['result']}</td></tr>" for t in stats["trades"][:10]]) or "<tr><td colspan=4 style='text-align:center;color:#888'>No trades yet - Waiting for perfect S/R balance (24/7 scanning)</td></tr>"
@@ -159,4 +163,3 @@ def home():
 
 threading.Thread(target=loop, daemon=True).start()
 if __name__=="__main__": app.run(host='0.0.0.0', port=int(os.getenv("PORT",10000)))
-                
