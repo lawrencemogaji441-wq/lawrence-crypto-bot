@@ -1,4 +1,5 @@
-import os, time, requests, pandas as pd, ta, pytz, threading, numpy as np
+
+    import os, time, requests, pandas as pd, ta, pytz, threading, numpy as np
 from datetime import datetime
 from pybit.unified_trading import HTTP
 from flask import Flask
@@ -213,3 +214,4 @@ def home():
 
 threading.Thread(target=loop, daemon=True).start()
 if __name__=="__main__": app.run(host='0.0.0.0', port=int(os.getenv("PORT",10000)))
+        
