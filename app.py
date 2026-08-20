@@ -1,16 +1,14 @@
 import os, time, threading, requests
-from flask import Flask
+from flask import Flask, request
 import ccxt
 from datetime import datetime
 
 app = Flask(__name__)
-
 BYBIT_KEY = os.getenv("BYBIT_API_KEY", "")
 BYBIT_SECRET = os.getenv("BYBIT_API_SECRET", "")
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", "")
-
-stats = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "balance": "$10.7412 OK", "tg": "Checking...", "logs": ["Booting v10.7..."], "prices": "Loading..."}
+stats = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "balance": "$10.74 OK", "tg": "Checking...", "logs": ["Booting v10.7.1..."], "prices": "Loading..."}
 
 def log(m):
     print(m, flush=True)
@@ -19,47 +17,28 @@ def log(m):
 
 def send_tg(text):
     try:
-        if not TG_TOKEN or not TG_CHAT:
-            stats["tg"] = "Missing ENV"
-            log(f"TG Missing token={bool(TG_TOKEN)} chat={bool(TG_CHAT)}")
-            return False
+        if not TG_TOKEN or not TG_CHAT: stats["tg"]="Missing ENV"; return False
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
         r = requests.post(url, json={"chat_id": TG_CHAT, "text": text}, timeout=15)
-        if r.status_code==200:
-            stats["tg"] = "OK"
-            log("TG Sent OK")
-            return True
-        else:
-            stats["tg"] = f"Err {r.text[:80]}"
-            log(f"TG Err {r.text[:100]}")
-            return False
-    except Exception as e:
-        stats["tg"] = f"Err {e}"
-        log(f"TG Ex {e}")
-        return False
+        stats["tg"] = "OK" if r.status_code==200 else f"Err {r.text[:80]}"
+        log(f"TG {stats['tg']}")
+        return r.status_code==200
+    except Exception as e: stats["tg"]=f"Err {e}"; log(f"TG Ex {e}"); return False
 
 def worker():
     time.sleep(3)
-    log("Worker v10.7 started - TG fix")
-    # TEST TG IMMEDIATELY
-    send_tg(f"🤖 Lawrence Bot v10.7 LIVE\n💰 Balance {stats['balance']}\n🕐 {stats['started']}\n📊 Scanning BTC/ETH/SOL 24/7\nLink: https://e-crypto-bot.onrender.com")
-    
+    log("Worker v10.7.1 TG fix")
+    send_tg(f"🤖 Lawrence Bot v10.7.1 LIVE\n💰 {stats['balance']}\n🕐 {stats['started']}\nScanning 24/7")
     ex = ccxt.bybit({'apiKey': BYBIT_KEY, 'secret': BYBIT_SECRET, 'enableRateLimit': True})
     while True:
         try:
             bal = ex.fetch_balance(params={"accountType": "UNIFIED"})
-            info = bal.get('info',{}).get('result',{}).get('list',[])
-            for lst in info:
+            for lst in bal.get('info',{}).get('result',{}).get('list',[]):
                 for c in lst.get('coin',[]):
-                    if c['coin']=='USDT':
-                        stats["balance"] = f"${float(c['walletBalance']):.4f} OK"
-            btc = ex.fetch_ticker("BTCUSDT")['last']
-            eth = ex.fetch_ticker("ETHUSDT")['last']
-            sol = ex.fetch_ticker("SOLUSDT")['last']
-            stats["prices"] = f"BTC {btc:.0f} | ETH {eth:.0f} | SOL {sol:.0f}"
-            log(f"{stats['prices']} Waiting S/R")
-        except Exception as e:
-            log(f"Err {e}")
+                    if c['coin']=='USDT': stats["balance"]=f"${float(c['walletBalance']):.4f} OK"
+            stats["prices"]=f"BTC {ex.fetch_ticker('BTCUSDT')['last']:.0f} | ETH {ex.fetch_ticker('ETHUSDT')['last']:.0f}"
+            log(f"{stats['prices']} Waiting")
+        except Exception as e: log(f"Err {e}")
         time.sleep(40)
 
 threading.Thread(target=worker, daemon=True).start()
@@ -67,32 +46,20 @@ threading.Thread(target=worker, daemon=True).start()
 @app.route("/")
 def home():
     live = stats["balance"]
+    if "test_tg" in request.args: send_tg("✅ TG Test OK - Bot is LIVE!")
     try:
         ex = ccxt.bybit({'apiKey': BYBIT_KEY, 'secret': BYBIT_SECRET, 'enableRateLimit': True})
         bal = ex.fetch_balance(params={"accountType": "UNIFIED"})
         for lst in bal.get('info',{}).get('result',{}).get('list',[]):
             for c in lst.get('coin',[]):
-                if c['coin']=='USDT':
-                    live = f"${float(c['walletBalance']):.4f} OK"
-                    stats["balance"]=live
+                if c['coin']=='USDT': live=f"${float(c['walletBalance']):.4f} OK"; stats["balance"]=live
     except: pass
-
-    # Button to test TG
-    if "test_tg" in requests.args:
-        send_tg("✅ TG Test OK - Bot is LIVE!")
-
-    logs = "<br>".join(stats["logs"][-12:])
-    return f"""<html><head><meta http-equiv="refresh" content="20"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <style>body{{background:#000;color:#0f0;font-family:monospace;padding:12px}}.box{{border:1px solid #0f0;padding:10px;margin:8px 0}}a{{color:#0ff}}</style>
-    </head><body><h2>Lawrence v10.7 TG FIXED LIVE</h2>
-    <div class="box">Started: {stats['started']}<br>Balance: <b>{live}</b><br>TG: {stats['tg']}<br>{stats['prices']}</div>
-    <div class="box"><a href="/?test_tg=1">👉 Tap to TEST Telegram NOW</a></div>
-    <div class="box">Logs:<br>{logs}</div></body></html>
-    """
+    logs="<br>".join(stats["logs"][-12:])
+    return f'<html><head><meta http-equiv="refresh" content="20"><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{{background:#000;color:#0f0;font-family:monospace;padding:12px}}.box{{border:1px solid #0f0;padding:10px;margin:8px 0}}a{{color:#0ff}}</style></head><body><h2>Lawrence v10.7.1 TG FIXED</h2><div class="box">Started: {stats["started"]}<br>Balance: <b>{live}</b><br>TG: {stats["tg"]}<br>{stats["prices"]}</div><div class="box"><a href="/?test_tg=1">👉 TEST Telegram NOW</a></div><div class="box">Logs:<br>{logs}</div></body></html>'
 
 @app.route("/test-tg")
 def test_tg():
-    ok = send_tg("🧪 TG Test from /test-tg - If you see this, TG works!")
+    ok = send_tg("🧪 TG Test OK - If you see this TG works!")
     return f"TG Send: {ok} Status: {stats['tg']}"
 
 if __name__ == "__main__":
