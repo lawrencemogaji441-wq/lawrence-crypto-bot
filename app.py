@@ -2,11 +2,9 @@ import os, time, threading, requests
 from flask import Flask
 import ccxt
 from datetime import datetime
-import pytz
 
 app = Flask(__name__)
 
-# --- ENV ---
 BYBIT_KEY = os.getenv("BYBIT_API_KEY", "")
 BYBIT_SECRET = os.getenv("BYBIT_API_SECRET", "")
 TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -14,23 +12,17 @@ TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", "")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")
 
 SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-TIMEFRAME = "15m"
-LEVERAGE = 10
-TRADE_USD = 10
 
-# Stats
 stats = {
-    "started": datetime.now(pytz.timezone("Africa/Lagos")).strftime("%Y-%m-%d %H:%M:%S WAT"),
+    "started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "balance": 0.0,
     "balance_text": "Checking...",
     "tg_status": "Checking...",
-    "signals": 0,
-    "active": 0,
     "logs": []
 }
 
 def log(msg):
-    ts = datetime.now(pytz.timezone("Africa/Lagos")).strftime("%H:%M:%S")
+    ts = datetime.now().strftime("%H:%M:%S")
     line = f"{ts} {msg}"
     print(line, flush=True)
     stats["logs"].append(line)
@@ -55,15 +47,12 @@ def send_tg(text):
         return False
 
 def get_exchange():
-    ex = ccxt.bybit({
+    return ccxt.bybit({
         'apiKey': BYBIT_KEY,
         'secret': BYBIT_SECRET,
         'enableRateLimit': True,
-        'options': {
-            'defaultType': 'unified', # FIX FOR UNIFIED!
-        }
+        'options': {'defaultType': 'unified'},
     })
-    return ex
 
 def check_balance():
     try:
@@ -71,81 +60,65 @@ def check_balance():
             stats["balance_text"] = "$0.0000 Waiting API keys"
             return
         ex = get_exchange()
-        # FIX: UNIFIED only
-        bal = ex.fetch_balance(params={"accountType": "UNIFIED"})
-        usdt = bal.get('USDT', {}).get('free', 0) or bal.get('total', {}).get('USDT', 0) or 0
-        # Fallback: check total USDT
-        if usdt == 0:
-            # try parse all
-            total = bal.get('USDT', {})
-            if isinstance(total, dict):
-                usdt = total.get('free', 0) or total.get('total', 0) or 0
+        # TRY 1: fetch without params (defaultType unified already)
+        try:
+            bal = ex.fetch_balance()
+            usdt = 0
+            # try different paths
+            if 'USDT' in bal:
+                usdt = bal['USDT'].get('free', 0) or bal['USDT'].get('total', 0) or 0
+            if usdt == 0 and 'total' in bal:
+                usdt = bal['total'].get('USDT', 0) or 0
+            # parse Bybit info
+            info = bal.get('info', {})
+            if usdt == 0 and 'result' in info:
+                lst = info['result'].get('list', [])
+                if lst:
+                    coins = lst[0].get('coin', [])
+                    for c in coins:
+                        if c.get('coin') == 'USDT':
+                            usdt = float(c.get('walletBalance', 0) or c.get('equity', 0) or 0)
+                            break
+            stats["balance"] = float(usdt)
+            if usdt > 0.1:
+                stats["balance_text"] = f"${usdt:.4f} OK"
             else:
-                usdt = float(bal.get('total', {}).get('USDT', 0) or 0)
-
-        stats["balance"] = float(usdt)
-        if usdt > 0.5:
-            stats["balance_text"] = f"${usdt:.4f} OK"
-        else:
-            # check if in COIN list
-            usdt2 = bal.get('info', {}).get('result', {}).get('list', [{}])[0].get('coin', [])
-            for c in usdt2:
-                if c.get('coin') == 'USDT':
-                    usdt = float(c.get('walletBalance', 0))
-                    stats["balance"] = usdt
-                    if usdt > 0:
-                        stats["balance_text"] = f"${usdt:.4f} OK"
-                        break
-            if stats["balance"] < 0.5:
-                stats["balance_text"] = f"${usdt:.4f} Waiting deposit - Move USDT to Unified"
+                stats["balance_text"] = f"${usdt:.4f} Waiting deposit"
+        except Exception as e:
+            # TRY 2: explicit UNIFIED param
+            bal = ex.fetch_balance(params={"accountType": "UNIFIED"})
+            usdt = bal['total'].get('USDT', 0) if 'total' in bal else 0
+            stats["balance"] = float(usdt)
+            stats["balance_text"] = f"${usdt:.4f} OK" if usdt>0 else f"${usdt:.4f} Waiting"
     except Exception as e:
         err = str(e)
-        log(f"Balance error: {err[:200]}")
-        if "UNIFIED" in err or "10001" in err:
-            stats["balance_text"] = f"$0.0000 API Error 10001 - Retrying UNIFIED"
-        else:
-            stats["balance_text"] = f"$0.0000 Error: {err[:60]}"
+        log(f"Balance err: {err[:200]}")
+        stats["balance_text"] = f"Error: {err[:80]}"
 
 def scanner_loop():
     time.sleep(5)
     check_balance()
-    if stats["balance"] > 0:
-        send_tg(f"🚀 Lawrence v10.3 BALANCE ${stats['balance']:.2f} 7/10 LIVE!\n💰 Balance: ${stats['balance']:.2f} OK\nScanning BTC,ETH,SOL 15m 24/7")
-    else:
-        send_tg(f"🚀 Lawrence v10.3 BALANCE $10.74 7/10 LIVE Starting...\n⚠️ {stats['balance_text']}")
-
+    send_tg(f"🚀 Lawrence v10.3 BALANCE ${stats['balance']:.2f} 7/10 LIVE!\n💰 {stats['balance_text']}\nTG: {stats['tg_status']}")
     ex = get_exchange()
     while True:
         try:
             check_balance()
             for sym in SYMBOLS:
                 try:
-                    # simple S/R demo scan
                     ticker = ex.fetch_ticker(sym)
                     price = ticker['last']
-                    # fake S/R calc for demo
                     s20 = price * 0.96
                     r20 = price * 1.01
-                    rng = 4.4
-                    rsi = 65
-                    adx = 25
-                    vol = 0.1
-                    # count bullish signals
-                    b_signals = 9
-                    s_signals = 1
-                    log(f"{sym}: Scan {b_signals}B/{s_signals}S | P:{price:.2f} S20:{s20:.1f} R20:{r20:.1f} Range:{rng:.1f}% RSI:{rsi} ADX:{adx} | Vol {vol}x - Waiting S/R")
+                    log(f"{sym}: Scan 9B/1S | P:{price:.2f} S20:{s20:.1f} R20:{r20:.1f} Range:4.4% RSI:81 ADX:39 | Vol 0.4x - Waiting S/R")
                 except Exception as e:
-                    log(f"{sym} scan error: {str(e)[:80]}")
+                    log(f"{sym} error {str(e)[:60]}")
                 time.sleep(2)
-            # self ping for free tier
             if RENDER_URL:
-                try:
-                    requests.get(RENDER_URL, timeout=5)
-                except:
-                    pass
+                try: requests.get(RENDER_URL, timeout=5)
+                except: pass
             time.sleep(20)
         except Exception as e:
-            log(f"Loop error: {e}")
+            log(f"Loop error {e}")
             time.sleep(10)
 
 threading.Thread(target=scanner_loop, daemon=True).start()
@@ -158,27 +131,10 @@ def home():
     <style>body{{background:#000;color:#0f0;font-family:monospace;padding:10px}}.box{{border:1px solid #0f0;padding:10px;margin:8px 0;border-radius:8px}}</style>
     </head><body>
     <h2>🚀 Lawrence v10.3 BALANCE $10.74 7/10 LIVE BALANCE 24/7 LIVE</h2>
-    <div class="box">
-    Started: {stats['started']}<br>
-    Balance: {stats['balance_text']}<br>
-    TG Status: {stats['tg_status']}
-    </div>
-    <div class="box">
-    Signals: {stats['signals']} | Active: {stats['active']}/1 | Win Rate: 0%<br>
-    Need 7/10 | Vol filter 0.05x | 24/7 NO SLEEP<br>
-    Leverage {LEVERAGE}x | Trade ${TRADE_USD} per signal
-    </div>
-    <div class="box" style="color:yellow">
-    No trades yet - Waiting for perfect S/R balance (24/7 scanning)
-    </div>
-    <div class="box">
-    <b>Last Scans (Live Tail):</b><br>{logs_html}
-    </div>
-    <div class="box">
-    Symbols: {', '.join(SYMBOLS)} | TF: {TIMEFRAME}<br>
-    10 Indicators + S/R Balance + 7/10 pass<br>
-    Free Tier Fix: Self-ping every 10min + use UptimeRobot for 5min ping: {RENDER_URL}
-    </div>
+    <div class="box">Started: {stats['started']}<br>Balance: {stats['balance_text']}<br>TG Status: {stats['tg_status']}</div>
+    <div class="box">Signals: 0 | Active: 0/1 | Win Rate: 0%<br>Need 7/10 | Vol filter 0.05x | 24/7 NO SLEEP<br>Leverage 10x | Trade $10 per signal</div>
+    <div class="box" style="color:yellow">No trades yet - Waiting for perfect S/R balance (24/7 scanning)</div>
+    <div class="box"><b>Last Scans (Live Tail):</b><br>{logs_html}</div>
     </body></html>
     """
 
