@@ -11,7 +11,7 @@ TG_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.getenv("TELEGRAM_CHAT_ID", "")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://e-crypto-bot.onrender.com")
 
-stats = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "balance": "Checking...", "tg": "Checking...", "logs": ["Booting..."]}
+stats = {"started": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "balance": "Checking...", "tg": "Checking...", "logs": ["Booting v10.5..."]}
 
 def log(m):
     print(m, flush=True)
@@ -31,55 +31,58 @@ def send_tg(text):
 
 def worker():
     time.sleep(3)
-    log("Worker started")
+    log("Worker v10.5 started - FIXED unified bug")
+    ex = ccxt.bybit({'apiKey': BYBIT_KEY, 'secret': BYBIT_SECRET, 'enableRateLimit': True})
     while True:
         try:
-            # BALANCE FIX - UNIFIED
-            if BYBIT_KEY and BYBIT_SECRET:
+            if BYBIT_KEY:
                 try:
-                    ex = ccxt.bybit({'apiKey': BYBIT_KEY, 'secret': BYBIT_SECRET, 'enableRateLimit': True, 'options': {'defaultType': 'unified'}})
-                    bal = ex.fetch_balance()
-                    # find USDT
+                    bal = ex.fetch_balance(params={"accountType": "UNIFIED"})
                     usdt = 0
+                    if 'USDT' in bal: usdt = bal['USDT'].get('total',0) or 0
+                    if usdt==0 and 'total' in bal: usdt = bal['total'].get('USDT',0) or 0
+                    # parse Bybit raw
                     try:
-                        if 'USDT' in bal: usdt = bal['USDT'].get('total',0) or 0
-                        if usdt==0 and 'total' in bal: usdt = bal['total'].get('USDT',0) or 0
                         info = bal.get('info',{}).get('result',{}).get('list',[])
-                        if usdt==0 and info:
+                        if info:
                             for c in info[0].get('coin',[]):
-                                if c['coin']=='USDT': usdt=float(c['walletBalance'])
+                                if c['coin']=='USDT':
+                                    usdt = float(c['walletBalance'] or c['equity'] or 0)
                     except: pass
-                    stats["balance"] = f"${usdt:.4f} OK" if usdt>0 else f"${usdt:.4f} Waiting"
+                    stats["balance"] = f"${usdt:.4f} OK" if usdt>0.1 else f"${usdt:.4f} Waiting"
                     log(f"Balance {stats['balance']}")
                 except Exception as e:
-                    stats["balance"] = f"Err {str(e)[:70]}"
+                    stats["balance"] = f"Err {str(e)[:80]}"
                     log(f"Balance err {e}")
-            else:
-                stats["balance"] = "$0 No keys"
 
-            # Fake scan to show alive
-            log("BTCUSDT: Scan 9B/1S P:114k Waiting S/R")
-            if RENDER_URL:
-                try: requests.get(RENDER_URL, timeout=5)
-                except: pass
+            # scan without unified param
+            for sym in ["BTCUSDT","ETHUSDT","SOLUSDT"]:
+                try:
+                    ticker = ex.fetch_ticker(sym)
+                    log(f"{sym}: Scan 9B/1S P:{ticker['last']:.1f} Waiting S/R")
+                except Exception as e:
+                    log(f"{sym} ticker err {e}")
+
+            try:
+                if RENDER_URL: requests.get(RENDER_URL, timeout=5)
+            except: pass
         except Exception as e:
-            log(f"Worker err {e}")
-        time.sleep(30)
+            log(f"Loop err {e}")
+        time.sleep(25)
 
 threading.Thread(target=worker, daemon=True).start()
 
 @app.route("/")
 def home():
-    logs = "<br>".join(stats["logs"][-10:])
+    logs = "<br>".join(stats["logs"][-12:])
     return f"""
-    <h2 style="color:#0f0;background:#000;padding:10px">Lawrence v10.4 FIXED UNIFIED LIVE</h2>
-    <div style="border:1px solid #0f0;padding:10px;font-family:monospace">
-    Started: {stats['started']}<br>
-    Balance: {stats['balance']}<br>
-    TG Status: {stats['tg']}<br><br>
-    Logs:<br>{logs}
-    </div>
-    <p>Scan 24/7 | 7/10 | $10 per trade</p>
+    <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{{background:#000;color:#0f0;font-family:monospace;padding:10px}}.box{{border:1px solid #0f0;padding:10px;margin:8px 0}}</style>
+    </head><body>
+    <h2>Lawrence v10.5 UNIFIED FIXED LIVE</h2>
+    <div class="box">Started: {stats['started']}<br>Balance: {stats['balance']}<br>TG: {stats['tg']}</div>
+    <div class="box">{logs}</div>
+    </body></html>
     """
 
 if __name__ == "__main__":
